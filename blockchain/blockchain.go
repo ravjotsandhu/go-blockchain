@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	path        = "./blocks"
-	file        = "./blocks/MANIFEST"
+	path        = ".tmp/blocks"
+	file        = ".tmp/blocks/MANIFEST"
 	genesisData = "First Transaction from Genesis" //arbitrary data for our implementation(arbirary input signature)
 )
 
