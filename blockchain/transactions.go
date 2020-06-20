@@ -31,7 +31,7 @@ func CoinbaseTx(to, data string) *Transaction {
 	txout := NewTXOutput(100, to) //100 is reward to the address for mining the block
 
 	tx := Transaction{nil, []TxInput{txin}, []TxOutput{*txout}}
-	tx.SetID()
+	tx.ID = tx.Hash()
 	return &tx
 }
 
@@ -53,18 +53,6 @@ func (tx Transaction) Serialize() []byte {
 		log.Panic(err)
 	}
 	return encoded.Bytes()
-}
-
-//creates a hash ID for transaction
-func (tx *Transaction) SetID() {
-	var encoded bytes.Buffer
-	var hash [32]byte
-
-	encode := gob.NewEncoder(&encoded)
-	err := encode.Encode(tx)
-	Handle(err)
-	hash = sha256.Sum256(encoded.Bytes())
-	tx.ID = hash[:]
 }
 
 //allows us to determine wether the transaction is coinbase or not
