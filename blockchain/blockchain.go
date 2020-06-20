@@ -1,8 +1,12 @@
 package blockchain
 
 import (
+	"bytes"
+	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"runtime"
 
@@ -100,9 +104,14 @@ func ContinueBlockChain(address string) *Blockchain {
 	return &chain
 } //now we can easily create the functionality that we need for our command line to be able to check the amt of tokens that are assigned to an account as well as be able to send tokens from one account to the next
 
-func (chain *Blockchain) AddBlock(transactions []*Transaction) {
+func (chain *Blockchain) AddBlock(transactions []*Transaction) *Block {
 	var lastHash []byte
 
+	for _, tx := range transactions {
+		if chain.VerifyTransaction(tx) != true {
+			log.Panic("Invalid Transaction")
+		}
+	}
 	err := chain.Database.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte("lh"))
 		Handle(err)
@@ -116,7 +125,6 @@ func (chain *Blockchain) AddBlock(transactions []*Transaction) {
 	Handle(err)
 
 	newBlock := CreateBlock(transactions, lastHash)
-
 	err = chain.Database.Update(func(txn *badger.Txn) error {
 		err := txn.Set(newBlock.Hash, newBlock.Serialize())
 		Handle(err)
@@ -125,6 +133,7 @@ func (chain *Blockchain) AddBlock(transactions []*Transaction) {
 		return err
 	})
 	Handle(err)
+	return newBlock
 }
 
 //converting the Blockchain struct into the BlockchainIterator struct
@@ -157,16 +166,13 @@ func (iter *BlockchainIterator) Next() *Block {
 unspent transactions are those that have an output not referenced by other inputs
 these are important because if an output has not been spent that means that tokens still exist for a certain user
 So by counting all unspent outputs that are assigned to a certain user we can find that how many tokens are assigned to that user*/
-func (chain *Blockchain) FindUnspentTransactions(address string) []Transaction {
-	var unspentTxs []Transaction
-
+func (chain *Blockchain) FindUTXO() map[string]TxOutputs {
+	UTXO := make(map[string]TxOutputs)
 	spentTxs := make(map[string][]int)
-
 	iter := chain.Iterator()
 
 	for {
 		block := iter.Next()
-
 		for _, tx := range block.Transactions {
 			txID := hex.EncodeToString(tx.ID)
 
@@ -179,64 +185,59 @@ func (chain *Blockchain) FindUnspentTransactions(address string) []Transaction {
 						}
 					}
 				}
-				if out.CanBeUnlocked(address) {
-					unspentTxs = append(unspentTxs, *tx)
-				}
+				outs := UTXO[txID]
+				outs.Outputs = append(outs.Outputs, out)
+				UTXO[txID] = outs
 			}
 			if tx.IsCoinbase() == false {
 				for _, in := range tx.Inputs {
-					if in.CanUnlock(address) {
-						inTxID := hex.EncodeToString(in.ID)
-						spentTxs[inTxID] = append(spentTxs[inTxID], in.Out)
-					}
+					inTxID := hex.EncodeToString(in.ID)
+					spentTxs[inTxID] = append(spentTxs[inTxID], in.Out)
 				}
 			}
 		}
-
 		if len(block.PrevHash) == 0 {
 			break
 		}
 	}
-	return unspentTxs
+	return UTXO
 }
 
-//finding the unspent transaction output
-func (chain *Blockchain) FindUTXO(address string) []TxOutput {
-	var UTXOs []TxOutput
-	unspentTransactions := chain.FindUnspentTransactions(address)
-	for _, tx := range unspentTransactions {
-		for _, out := range tx.Outputs {
-			if out.CanBeUnlocked(address) {
-				UTXOs = append(UTXOs, out)
+func (bc *Blockchain) FindTransaction(ID []byte) (Transaction, error) {
+	iter := bc.Iterator()
+	for {
+		block := iter.Next()
+		for _, tx := range block.Transactions {
+			if bytes.Compare(tx.ID, ID) == 0 {
+				return *tx, nil
 			}
 		}
+		if len(block.PrevHash) == 0 {
+			break
+		}
 	}
-	return UTXOs
+	return Transaction{}, errors.New("Transaction does not exist")
 }
 
-//It enables us to create normal transactions that are not coin based
-//but we do not have the ability to send the coins from one account to the other
-//for this to work we need to ensure that we have all unspent outputs and then ensure that they havhe enough tokens inside of them
-func (chain *Blockchain) FindSpendableOutputs(address string, amt int) (int, map[string][]int) {
-	unspentOuts := make(map[string][]int)
-	unspentTxs := chain.FindUnspentTransactions(address)
-	accumulated := 0
-
-Work:
-	for _, tx := range unspentTxs {
-		txID := hex.EncodeToString(tx.ID)
-
-		for outIdx, out := range tx.Outputs {
-			if out.CanBeUnlocked(address) && accumulated < amt {
-				accumulated += out.Value
-				unspentOuts[txID] = append(unspentOuts[txID], outIdx)
-
-				if accumulated >= amt {
-					break Work
-				}
-			}
-		}
+func (bc *Blockchain) SignTransaction(tx *Transaction, prevKey ecdsa.PrivateKey) {
+	prevTXs := make(map[string]Transaction)
+	for _, in := range tx.Inputs {
+		prevTX, err := bc.FindTransaction(in.ID)
+		Handle(err)
+		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
 	}
+	tx.Sign(prevKey, prevTXs)
+}
 
-	return accumulated, unspentOuts
+func (bc *Blockchain) VerifyTransaction(tx *Transaction) bool {
+	if tx.IsCoinbase() {
+		return true
+	}
+	prevTXs := make(map[string]Transaction)
+	for _, in := range tx.Inputs {
+		prevTX, err := bc.FindTransaction(in.ID)
+		Handle(err)
+		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
+	}
+	return tx.Verify(prevTXs)
 }
