@@ -25,10 +25,14 @@ type Transaction struct {
 
 func CoinbaseTx(to, data string) *Transaction {
 	if data == "" {
-		data = fmt.Sprintf("Coins to %s", to)
+		//random generator to generate a bunch of bytes inside of a slice then use it to create a string
+		randData := make([]byte, 24) //slice of bytes of length 24
+		_, err := rand.Read(randData)
+		Handle(err)
+		data = fmt.Sprintf("%x", randData)
 	}
 	txin := TxInput{[]byte{}, -1, nil, []byte(data)}
-	txout := NewTXOutput(100, to) //100 is reward to the address for mining the block
+	txout := NewTXOutput(20, to) //100 is reward to the address for mining the block
 
 	tx := Transaction{nil, []TxInput{txin}, []TxOutput{*txout}}
 	tx.ID = tx.Hash()
